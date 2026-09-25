@@ -18,26 +18,26 @@ const PROJECTS = [
     href: 'https://codexdevaz.vercel.app/',
   },
   {
-  title: 'Final E-commerce',
-  description: 'E-commerce web application for browsing products and shopping online.',
-  image: '/final-ecommerce.png',
-  color: '#2C2C2C',
-  href: 'https://final-front-5a95.vercel.app/',
-},
+    title: 'Final E-commerce',
+    description: 'E-commerce web application for browsing products and shopping online.',
+    image: '/final-ecommerce.png',
+    color: '#2C2C2C',
+    href: 'https://final-front-5a95.vercel.app/',
+  },
   {
-  title: 'GameWork',
-  description: 'Gaming store with categories, pre-orders, cart, login and a blog.',
-  image: '/gamework.png',
-  color: '#3B3B3B',
-  href: 'https://menim-saytim.vercel.app/',
-},
-{
-  title: 'Jarvis AI Assistant',
-  description: 'AI assistant built with Next.js and Electron.',
-  image: '/Jarvis.png',
-  color: '#1A1A1A',
-  href: 'https://github.com/elarizmr/edith-ai-assistant',
-},
+    title: 'GameWork',
+    description: 'Gaming store with categories, pre-orders, cart, login and a blog.',
+    image: '/gamework.png',
+    color: '#3B3B3B',
+    href: 'https://menim-saytim.vercel.app/',
+  },
+  {
+    title: 'Jarvis AI Assistant',
+    description: 'AI assistant built with Next.js and Electron.',
+    image: '/Jarvis.png',
+    color: '#1A1A1A',
+    href: 'https://github.com/elarizmr/edith-ai-assistant',
+  },
 ];
 
 export default function Portfolio() {
@@ -45,81 +45,128 @@ export default function Portfolio() {
   const trackRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<(HTMLAnchorElement | null)[]>([]);
   const cursorRef = useRef<HTMLDivElement>(null);
+  const dotRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const bgRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  const [translateX, setTranslateX] = useState(0);
+  // Cached, mount/resize-only measurements (never touched during scroll)
+  const cardCentersRef = useRef<number[]>([]);
+  const maxTranslateRef = useRef(0);
+  const translateXRef = useRef(0);
+  const activeIndexRef = useRef(-1);
+
   const [wrapperHeight, setWrapperHeight] = useState(0);
   const [hovered, setHovered] = useState<number | null>(null);
 
-  // Measure the track and calculate how much vertical scroll is needed
-  useEffect(() => {
-    const calculate = () => {
-      if (!trackRef.current) return;
-      const maxTranslate = Math.max(trackRef.current.scrollWidth - window.innerWidth, 0);
-      setWrapperHeight(window.innerHeight + maxTranslate);
-    };
+  // Recompute all layout-dependent numbers. Runs on mount/resize only,
+  // never inside the scroll handler, so scroll never triggers a reflow.
+  const measure = () => {
+    if (!trackRef.current) return;
 
-    calculate();
-    window.addEventListener('resize', calculate);
-    return () => window.removeEventListener('resize', calculate);
+    const maxTranslate = Math.max(trackRef.current.scrollWidth - window.innerWidth, 0);
+    maxTranslateRef.current = maxTranslate;
+    setWrapperHeight(window.innerHeight + maxTranslate);
+
+    cardCentersRef.current = cardRefs.current.map((el) =>
+      el ? el.offsetLeft + el.offsetWidth / 2 : 0
+    );
+  };
+
+  useEffect(() => {
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Turn vertical scroll into horizontal movement
+  // Re-measure card centers whenever hovered/background changes card layout
+  // (image swap doesn't change layout here, but keep it safe & cheap)
   useEffect(() => {
-    let ticking = false;
+    measure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wrapperHeight]);
+
+  // Apply transform/filter/opacity directly to DOM nodes — no setState,
+  // no reflow reads. Pure writes, so the browser can batch them in one frame.
+  const applyFrame = (translateX: number) => {
+    if (trackRef.current) {
+      trackRef.current.style.transform = `translate3d(${translateX}px,0,0)`;
+    }
+
+    const half = window.innerWidth / 2;
+    let closestIndex = 0;
+    let closestDist = Infinity;
+
+    cardRefs.current.forEach((el, i) => {
+      if (!el) return;
+      const center = cardCentersRef.current[i] + translateX;
+      const d = (center - half) / half; // -1 … 0 … 1
+      const a = Math.min(Math.abs(d), 1);
+
+      el.style.transform = `perspective(1400px) rotateY(${-d * 16}deg) scale(${1 - a * 0.16})`;
+      el.style.filter = `blur(${a * 4}px)`;
+      el.style.opacity = `${1 - a * 0.25}`;
+
+      if (Math.abs(center - half) < closestDist) {
+        closestDist = Math.abs(center - half);
+        closestIndex = i;
+      }
+    });
+
+    if (closestIndex !== activeIndexRef.current) {
+      const prev = dotRefs.current[activeIndexRef.current];
+      const next = dotRefs.current[closestIndex];
+      if (prev) {
+        prev.style.width = '8px';
+        prev.style.backgroundColor = '#D8D0C0';
+      }
+      if (next) {
+        next.style.width = '28px';
+        next.style.backgroundColor = '#E8501A';
+      }
+      activeIndexRef.current = closestIndex;
+    }
+  };
+
+  // Turn vertical scroll into horizontal movement — rAF-throttled,
+  // writes only, no React re-render per frame.
+  useEffect(() => {
+    let raf = 0;
 
     const handleScroll = () => {
-      if (ticking) return;
-      ticking = true;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!wrapperRef.current) return;
 
-      window.requestAnimationFrame(() => {
-        if (wrapperRef.current && trackRef.current) {
-          const rect = wrapperRef.current.getBoundingClientRect();
-          const scrollableDistance = wrapperHeight - window.innerHeight;
+        const rect = wrapperRef.current.getBoundingClientRect();
+        const scrollableDistance = wrapperHeight - window.innerHeight;
 
-          if (scrollableDistance <= 0) {
-            setTranslateX(0);
-          } else {
-            const progress = Math.min(Math.max(-rect.top / scrollableDistance, 0), 1);
-            const maxTranslate = trackRef.current.scrollWidth - window.innerWidth;
-            setTranslateX(-progress * maxTranslate);
-          }
+        let x = 0;
+        if (scrollableDistance > 0) {
+          const progress = Math.min(Math.max(-rect.top / scrollableDistance, 0), 1);
+          x = -progress * maxTranslateRef.current;
         }
-        ticking = false;
+
+        translateXRef.current = x;
+        applyFrame(x);
       });
     };
 
-    window.addEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
-    return () => window.removeEventListener('scroll', handleScroll);
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wrapperHeight]);
 
-  // Move the "click to view" pill with the mouse
+  // Move the "click to view" pill with the mouse — already DOM-direct, kept as is
   const handleMouseMove = (e: React.MouseEvent) => {
     if (cursorRef.current) {
       cursorRef.current.style.transform = `translate(${e.clientX + 18}px, ${e.clientY + 18}px)`;
     }
-  };
-
-  // Active dot
-  const maxTranslate = Math.max((trackRef.current?.scrollWidth ?? 0) - (typeof window !== 'undefined' ? window.innerWidth : 0), 0);
-  const progress = maxTranslate > 0 ? Math.min(Math.max(-translateX / maxTranslate, 0), 1) : 0;
-  const activeIndex = Math.round(progress * (PROJECTS.length - 1));
-
-  // Cards farther from the screen center get smaller, tilted and blurred
-  const getCardStyle = (i: number): React.CSSProperties => {
-    const el = cardRefs.current[i];
-    if (!el || typeof window === 'undefined') return {};
-
-    const half = window.innerWidth / 2;
-    const center = el.offsetLeft + el.offsetWidth / 2 + translateX;
-    const d = (center - half) / half; // -1 (left) … 0 (center) … 1 (right)
-    const a = Math.min(Math.abs(d), 1);
-
-    return {
-      transform: `perspective(1400px) rotateY(${-d * 16}deg) scale(${1 - a * 0.16})`,
-      filter: `blur(${a * 4}px)`,
-      opacity: 1 - a * 0.25,
-    };
   };
 
   return (
@@ -142,6 +189,9 @@ export default function Portfolio() {
           {PROJECTS.map((p, i) => (
             <div
               key={p.title}
+              ref={(el) => {
+                bgRefs.current[i] = el;
+              }}
               aria-hidden="true"
               className="absolute inset-0 transition-opacity duration-500 ease-out"
               style={{
@@ -158,10 +208,6 @@ export default function Portfolio() {
           <div
             ref={trackRef}
             className="relative flex w-max flex-shrink-0 items-center gap-6 md:gap-10 will-change-transform"
-            style={{
-              transform: `translateX(${translateX}px)`,
-              transition: 'transform 0.05s linear',
-            }}
           >
             {/* Leading spacer — first card starts centered */}
             <div className="flex-shrink-0 w-[11vw] sm:w-[27vw] md:w-[calc(50vw-260px)]" />
@@ -179,8 +225,7 @@ export default function Portfolio() {
                 onMouseLeave={() => setHovered(null)}
                 onFocus={() => setHovered(i)}
                 onBlur={() => setHovered(null)}
-                className="group relative flex-shrink-0 w-[78vw] sm:w-[46vw] md:w-[520px] rounded-[44px] overflow-hidden bg-white/80 backdrop-blur-md shadow-2xl"
-                style={getCardStyle(i)}
+                className="group relative flex-shrink-0 w-[78vw] sm:w-[46vw] md:w-[520px] rounded-[44px] overflow-hidden bg-white/80 backdrop-blur-md shadow-2xl will-change-transform"
               >
                 {/* Image */}
                 <div
@@ -234,16 +279,19 @@ export default function Portfolio() {
             </span>
           </div>
 
-          {/* Progress dots */}
+          {/* Progress dots — updated directly via refs, no re-render */}
           <div className="absolute bottom-6 md:bottom-10 left-0 right-0 flex items-center justify-center gap-2">
             {PROJECTS.map((p, i) => (
               <span
                 key={p.title}
+                ref={(el) => {
+                  dotRefs.current[i] = el;
+                }}
                 className="rounded-full transition-all duration-300"
                 style={{
-                  width: i === activeIndex ? '28px' : '8px',
+                  width: i === 0 ? '28px' : '8px',
                   height: '8px',
-                  backgroundColor: i === activeIndex ? '#E8501A' : '#D8D0C0',
+                  backgroundColor: i === 0 ? '#E8501A' : '#D8D0C0',
                 }}
               />
             ))}
